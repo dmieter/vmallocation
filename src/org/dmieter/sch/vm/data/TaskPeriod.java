@@ -1,9 +1,9 @@
 package org.dmieter.sch.vm.data;
 
 public class TaskPeriod {
-    Task task;
+    public Task task;
 
-    int periodStart;
-    int periodEnd;
+    public int periodStart;
+    public int periodEnd;
 
 }
