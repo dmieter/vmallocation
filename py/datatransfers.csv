@@ -1,0 +1,7 @@
+source_task;target_task;volume
+"Task 1";"Task 5";100
+"Task 1";"Task 7";20
+"Task 2";"Task 7";10
+"Task 3";"Task 6";150
+"Task 4";"Task 7";5
+"Task 6";"Task 8";50

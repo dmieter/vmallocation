@@ -62,7 +62,7 @@ ax.barh(df.task, df.calc_days, left=df.possible_start, color=df.color)
 #ax.barh(df.Task, df.calc_days, left=df.start_num, color=df.color, fill=False)
 ax.barh(df.task, df.calc_days, left=df.latest_start, color=df.color, fill=False, hatch='///')
 
-rownum = 0;
+rownum = 0
 for index, row in df.iterrows():
     ax.text(row.end+0.1, rownum, row.batch, va='center', alpha=0.8)
     ax.text(row.start-0.1, rownum, row.task, va='center', ha='right', alpha=0.7)
