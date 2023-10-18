@@ -1,2 +1,5 @@
 vm_type;perf;cost;vm_start_time;vm_stop_time
 "1X";1;1;1;1
+"2X";1.2;1.5;1;1
+"3X";1.3;2;1;1
+"XXX";2;2;1;1

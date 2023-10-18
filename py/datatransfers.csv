@@ -1,4 +1,4 @@
-source_task;target_task;volume
+source_task;target_task;data_volume
 "Task 1";"Task 5";100
 "Task 1";"Task 7";20
 "Task 2";"Task 7";10

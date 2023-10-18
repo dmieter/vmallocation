@@ -19,6 +19,8 @@ def loadTasks():
 
     tasks["task_type"] = 'Task'
     tasks["task_status"] = 'None'
+    tasks["assigned_vm"] = pd.NA
+    tasks["allocation_end"] = pd.NA
 
     # days between start and end of each task
     tasks['interval'] = tasks.end - tasks.start
@@ -30,15 +32,14 @@ def loadVMs():
     vm_counter = 0
     vm_types = pd.read_csv('vmtypes.csv', delimiter=';')
     vms = pd.DataFrame()
-    vms_log = pd.DataFrame()
     print("VM TYPES:")
     print(vm_types)
 
-    return vm_types, vms, vms_log
+    return vm_types, vms
 
 
 tasks, data_transfers = loadTasks()
-vm_types, vms, vms_log = loadVMs()
+vm_types, vms = loadVMs()
 
 print("""
       
@@ -103,8 +104,18 @@ def generateVmId(row):
     vm_counter = vm_counter + 1
     return 'VM ' + str(vm_counter)
 
-def addNewVmsRandomly(vms, vm_types, num):
-    random_types = vm_types.sample(num, replace = True)
+def addNewVmsRandomly(vms, vm_types, num, vm_perf_factor = 1):
+
+    # 1. take more samples then required by factor of vm_perf_factor
+    initial_sample_num = num * vm_perf_factor if vm_perf_factor >= 1 else num / vm_perf_factor
+    initial_sample_num = math.ceil(initial_sample_num)
+
+    random_types = vm_types.sample(initial_sample_num, replace = True)
+
+    # 2. if needed - pick first n by perf
+    if vm_perf_factor != 1:
+        random_types = random_types.nlargest(num,'perf') if vm_perf_factor >= 1 else random_types.nsmallest(num,'perf')
+
     random_types['vm_status'] = 'open'
     random_types['vm_id'] = random_types.apply(lambda x: generateVmId(x), axis=1)  
     
@@ -120,23 +131,29 @@ def clearTasks(batch):
 def getActiveVms(vms):
     return vms[vms.vm_status == 'active']
 
-def prepareVmMatchings(batch, vms, additional_vms_num = 0):
+def prepareVmMatchings(batch, vms, additional_vms_num = 0, vm_perf_factor = 1):
     # first remove old temp tasks and not started vms
     if not batch.empty:
         batch = clearTasks(batch)
     if not vms.empty:
         vms = getActiveVms(vms)
     
+    vms_to_add = 0
+
+    # add vms or off-tasks to match each other
     diff = len(batch) - len(vms)
     if diff > 0:
-        vms = addNewVmsRandomly(vms, vm_types, diff)
+        vms_to_add = vms_to_add + diff
     elif diff < 0:
         batch = addOffTasks(batch, -diff)
         
     # add additional vms and tasks for more optimization options    
     if additional_vms_num > 0:
-        vms = addNewVmsRandomly(vms, vm_types, additional_vms_num)
+        vms_to_add = vms_to_add + additional_vms_num
         batch = addOffTasks(batch, additional_vms_num, len(batch) + 1)  # use len(batch) + 1 to avois name collisions
+
+    if vms_to_add > 0:
+        vms = addNewVmsRandomly(vms, vm_types, vms_to_add, vm_perf_factor)
 
     #pair all    
     vms['key'] = 1
@@ -170,6 +187,8 @@ def calcVmAllocationCost(row):
     max_data_transfer_time = 0      # max time needed to transfer all data from all source tasks (len)
 
     earliest_data_ready_time = 0    # earliest time all data can be copied from source tasks (moment)
+    input_data_transfer = np.NaN
+    output_data_transfer = np.NaN
 
     
 
@@ -187,12 +206,18 @@ def calcVmAllocationCost(row):
     if row.task_type == 'Off':
         possible_task_start = current_time                      # release task can be started any time (no data/logic restrictions)
 
+        # calculate time needed to transfer data before shut down vm
         release_time = vm_type.vm_stop_time 
-        outgoing_data = data_transfers[data_transfers.source_task == row.task]
+        vm_tasks = tasks[tasks.assigned_vm == row.vm_id]
+        outgoing_data = pd.merge(vm_tasks, data_transfers, left_on = 'task', right_on = 'source_task')[['task', 'allocation_end', 'data_volume', 'assigned_vm']]
         if len(outgoing_data) > 0:
-            outgoing_data['transfer_time'] = outgoing_data.volume/DATA_TRANSFER_SPEED
-            outgoing_data_transfer_time = outgoing_data.transfer_time.max()
+            outgoing_data['transfer_time'] = outgoing_data.data_volume/DATA_TRANSFER_SPEED
+            outgoing_data['transfer_end'] = outgoing_data.allocation_end + outgoing_data.transfer_time
+            outgoing_data['effective_transfer_time'] = outgoing_data.transfer_end - possible_vm_start  # meaning time between the time vm can be stopped and it finishes the longest data transfer
+            outgoing_data_transfer_time = outgoing_data.effective_transfer_time.max()
+            outgoing_data_transfer_time = max(outgoing_data_transfer_time, 0)   # can't be negative
             release_time = release_time + outgoing_data_transfer_time
+            output_data_transfer = outgoing_data_transfer_time
         
         
     
@@ -202,15 +227,17 @@ def calcVmAllocationCost(row):
         if(row.vm_status == 'open'):
             preparation_time = preparation_time + vm_type.vm_start_time             # add startup time
 
+        # calclualte additional preparation time to copy required input data
         required_data = data_transfers[data_transfers.target_task == row.task]
-        required_data['transfer_time'] = required_data.volume/DATA_TRANSFER_SPEED  # maybe speed should be decreased based on number of parallel data transfers
+        required_data['transfer_time'] = required_data.data_volume/DATA_TRANSFER_SPEED  # maybe speed should be decreased based on number of parallel data transfers
         if len(required_data) > 0:
             required_data = pd.merge(required_data, tasks, left_on = 'source_task', right_on = 'task')[['task', 'transfer_time', 'allocation_end', 'assigned_vm']]
             required_data[required_data.assigned_vm == row.vm_id]['transfer_time'] = 0
             required_data['earliest_ready_time'] = required_data.allocation_end + required_data.transfer_time
             earliest_data_ready_time = required_data.earliest_ready_time.max()
             max_data_transfer_time = required_data.transfer_time.max()
-            preparation_time = preparation_time + max_data_transfer_time       
+            preparation_time = preparation_time + max_data_transfer_time  
+            input_data_transfer = max_data_transfer_time
 
         possible_task_start = max(row.start, earliest_data_ready_time)    # possibly check if can start earlier, i.e. remove row.start from max
 
@@ -231,10 +258,10 @@ def calcVmAllocationCost(row):
     else:    
         allocation_cost = (full_runtime + idle_time) * vm_type.cost
         
-    return allocation_cost + 1, expected_vm_start, expected_task_start, expected_task_end, expected_vm_end  # allocation_cost + 1 because zeros are bad for optimization
+    return allocation_cost + 1, expected_vm_start, input_data_transfer, expected_task_start, expected_task_end, output_data_transfer, expected_vm_end  # allocation_cost + 1 because zeros are bad for optimization
 
 def calcAllocationCosts(matchings):
-    matchings[['allocation_cost', 'vm_start', 'task_start', 'task_end', 'vm_end']] = matchings.apply(lambda x: calcVmAllocationCost(x), axis=1, result_type='expand')  
+    matchings[['allocation_cost', 'vm_start', 'input_data', 'task_start', 'task_end', 'output_data', 'vm_end']] = matchings.apply(lambda x: calcVmAllocationCost(x), axis=1, result_type='expand')  
     
 
 def calcPairing(row, task_list, vm_list):
@@ -308,7 +335,7 @@ def calculateMinCostPairings2(matchings):
 
 # %% SCHEDULE AND ALLOCATION
 
-def applyPairings(pairings, tasks, vms, vms_log):
+def applyPairings(pairings, tasks, vms):
     
     vms_off = pairings[(pairings.vm_status == 'active') & (pairings.task_type == 'Off')]
     vms_off = vms_off[['vm_id', 'vm_status', 'vm_end']]
@@ -328,7 +355,8 @@ def applyPairings(pairings, tasks, vms, vms_log):
    
     vms_reuse = pairings[(pairings.vm_status == 'active') & (pairings.task_type == 'Task')] # do nothing, they just remain active
 
-    pairing_log = pairings[(pairings.vm_status != 'open') | (pairings.task_type != 'Off')][['vm_id', 'task', 'vm_start', 'task_start', 'task_end', 'vm_end', 'allocation_cost']]
+    global vms_log
+    pairing_log = pairings[(pairings.vm_status != 'open') | (pairings.task_type != 'Off')][['vm_id', 'vm_type', 'task', 'vm_start', 'input_data', 'task_start', 'task_end', 'output_data', 'vm_end', 'volume', 'allocation_cost']]
     pairing_log.allocation_cost = pairing_log.allocation_cost - 1 # removing extra 1 required for hungarian alg
     vms_log = vms_log.append(pairing_log)
     
@@ -339,13 +367,13 @@ def applyPairings(pairings, tasks, vms, vms_log):
     assigned_tasks.set_index('index', inplace = True)
     tasks = assigned_tasks.combine_first(tasks)
     
-    print("VMS:")
-    print(vms)
+    #print("VMS:")
+    #print(vms)
     
     #print("TASKS:")
     #print(tasks)
 
-    return tasks, vms, vms_log
+    return tasks, vms
     
 #calcAllocationCosts(matchings)
 #pairings = simulatePairings(matchings)
@@ -353,23 +381,39 @@ def applyPairings(pairings, tasks, vms, vms_log):
 #applyPairings(pairings)
 #print(pairings)
 
-
-def scheduleBatch(batch_num, tasks, vms, vms_log):
+INCREASE_IN_PERF_NUMBER = 0
+vms_log = pd.DataFrame()
+def scheduleBatch(batch_num, tasks, vms):
+    global INCREASE_IN_PERF_NUMBER
     print("Time: {} Batch: {}".format(current_time, batch_num))
     batch = tasks[tasks.batch == batch_num]
-    matchings = prepareVmMatchings(batch, vms, 2)
-    calcAllocationCosts(matchings)
-    pairings = calculateMinCostPairings2(matchings)
-    print(pairings[["task", 'volume', "vm_id", "allocation_cost", 'vm_start', 'task_start', 'task_end', 'vm_end', "pairing"]])
-    tasks, vms, vms_log = applyPairings(pairings, tasks, vms, vms_log)
+    
+    # schedule one batch with increasing vms perf each retry
+    retry_counts = 10
+    vm_perf_factor = 1
+    pairings = {}
+    while retry_counts > 1:
+        try:
+            matchings = prepareVmMatchings(batch, vms, 5, vm_perf_factor)
+            calcAllocationCosts(matchings)
+            pairings = calculateMinCostPairings2(matchings)
+            break
+        except Exception:
+            print(matchings[["task", 'volume', "vm_id", "allocation_cost", 'vm_start', 'task_start', 'task_end', 'vm_end']])
+            retry_counts = retry_counts - 1
+            vm_perf_factor += 0.25
+            INCREASE_IN_PERF_NUMBER = INCREASE_IN_PERF_NUMBER + 1
 
-    return tasks, vms, vms_log
+    #print(pairings[["task", 'volume', "vm_id", "allocation_cost", 'vm_start', 'task_start', 'task_end', 'vm_end', "pairing"]])
+    tasks, vms = applyPairings(pairings, tasks, vms)
+
+    return tasks, vms
 
 
 def runExperiment():
     global tasks, data_transfers, vm_types, vms, vm_counter
     tasks, data_transfers = loadTasks()
-    vm_types, vms, vms_log = loadVMs()
+    vm_types, vms = loadVMs()
     vm_counter = 0
 
     retrieveParalellBatches(vm_types, tasks, 0)
@@ -378,22 +422,29 @@ def runExperiment():
     batches = list(tasks.batch.unique())
 
     for batch_num in batches:
-        tasks, vms, vms_log = scheduleBatch(batch_num, tasks, vms, vms_log)
+        tasks, vms = scheduleBatch(batch_num, tasks, vms)
 
     print("""
           
     VMS:""")
     print(vms)
-        
+
     print("""
           
     TASKS:""")
-    print(tasks)
+    print(tasks[['task', 'volume', 'start', 'end', 'batch', 'task_status', 'assigned_vm', 'allocation_start', 'allocation_end']])
+
+
+    print("""
+
+    DATA TRANSFERS:""")
+    print(data_transfers)    
 
     print("""
           
     ALLOCATION LOG:""")
     print(vms_log)
+    print('INCREASE_IN_PERF_NUMBER: {}'.format(INCREASE_IN_PERF_NUMBER))
 
 
 # %% TEST
