@@ -5,10 +5,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch    
 from random import randrange
+from datetime import datetime
+
 
 print("Import Successful")
 
 # %% LOAD INPUT DATA
+
+INPUT_FOLDER = "workflows_v03/mix1_2 (4 workflow montage with 50 nodes, different start_time) (volume x10)/"
+MAX_WAIT_TIME = 4 #seconds
 
 ##### LOAD TASKS ##### 
 def loadTasksLocal():
@@ -50,7 +55,7 @@ def loadTasksMontageV1():
 
     return tasks, data_transfers
 
-def loadTasks(path = "workflows_v03/LIGO50/"):
+def loadTasks(path = INPUT_FOLDER):
     tasks = pd.read_csv(path + "task_time_table.csv", delimiter=',')
     tasks["task_id"]=tasks["task_id"].values.astype('str')
     tasks['task'] = tasks['task_id'] + "/" + tasks['task_name']
@@ -85,7 +90,7 @@ def loadVMsLocal():
     return vm_types, vms
 
 
-def loadVMs(path = "workflows_v03/LIGO50/"):
+def loadVMs(path = INPUT_FOLDER):
     vm_counter = 0
     vm_types = pd.read_csv(path + "processor_table.csv", delimiter=',')
     vm_types.rename(columns={'performance':'perf', 'VM_type': "vm_type"}, inplace=True)
@@ -241,7 +246,7 @@ def prepareVmMatchings(batch, vms, additional_vms_num = 0, vm_perf_factor = 1):
 import random
 import math
 
-current_time = -10
+current_time = -100
 DATA_TRANSFER_SPEED = 50000000 #50
 
 def calcVmAllocationCost(row):
@@ -436,7 +441,7 @@ def calculateMinCostPairingsThreaded(matchings):
     matchingResult = []
     thread = Thread(target=calculateMinCostPairings2, args=(matchings, matchingResult))
     thread.start()
-    for t in range(1,4):
+    for t in range(1, MAX_WAIT_TIME):
         time.sleep(t)
         print("Next check: {}".format(t)) 
         if len(matchingResult) > 0:
@@ -505,8 +510,9 @@ INCREASE_IN_PERF_NUMBER = 0
 vms_log = pd.DataFrame()
 def scheduleBatch(batch_num, tasks, vms):
     global INCREASE_IN_PERF_NUMBER
-    print("Time: {} Batch: {}".format(current_time, batch_num))
+
     batch = tasks[tasks.batch == batch_num]
+    print("Time: {} Batch: {} Batch Size: {}".format(current_time, batch_num, len(batch)))
     
     # schedule one batch with increasing vms perf each retry
     retry_counts = 10
@@ -514,7 +520,10 @@ def scheduleBatch(batch_num, tasks, vms):
     pairings = {}
     while retry_counts > 1:
         try:
-            matchings = prepareVmMatchings(batch, vms, 5, vm_perf_factor)
+            additional_vms = 5 if vm_perf_factor <= 100 else len(batch)
+            matchings = prepareVmMatchings(batch, vms, additional_vms, vm_perf_factor)
+            print("Global Time: {}".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            print("Matchings Size: {} VMs Size: {}".format(len(matchings), len(vms)))
             calcAllocationCosts(matchings)
             pairings = calculateMinCostPairingsThreaded(matchings)
             break
@@ -522,7 +531,7 @@ def scheduleBatch(batch_num, tasks, vms):
             #print(matchings[["task", 'volume', "vm_id", 'perf', "allocation_cost", 'start', 'end,' 'task_start', 'task_end']])
             retry_counts = retry_counts - 1
             vm_perf_factor += 1
-            if vm_perf_factor > 3:
+            if vm_perf_factor == 4:
                 vm_perf_factor = 100 
             print("New vm_perf_factor: {}".format(vm_perf_factor))        
             INCREASE_IN_PERF_NUMBER = INCREASE_IN_PERF_NUMBER + 1
