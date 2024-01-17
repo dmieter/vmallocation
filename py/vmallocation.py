@@ -333,9 +333,9 @@ def calcVmAllocationCost(row):
     if expected_task_end > row.end:
         allocation_cost = 10000000000 # can't execute task
     else:    
-        #allocation_cost = (full_runtime + idle_time) * vm_type.cost
+        allocation_cost = (full_runtime + idle_time) * vm_type.cost
         #allocation_cost = full_runtime
-        allocation_cost = full_runtime + idle_time
+        #allocation_cost = full_runtime + idle_time
         #allocation_cost = input_data_transfer
 
     if OPTIMIZATION == "MAX":
