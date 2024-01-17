@@ -12,8 +12,10 @@ print("Import Successful")
 
 # %% LOAD INPUT DATA
 
-INPUT_FOLDER = "workflows_v03/mix1_2 (4 workflow montage with 50 nodes, different start_time) (volume x10)/"
+INPUT_FOLDER = "workflows_v03/MONTAGE50 (volume x10)/"
 MAX_WAIT_TIME = 4 #seconds
+DATA_TRANSFER_SPEED = 500 #50
+OPTIMIZATION = "MAX"
 
 ##### LOAD TASKS ##### 
 def loadTasksLocal():
@@ -247,7 +249,7 @@ import random
 import math
 
 current_time = -100
-DATA_TRANSFER_SPEED = 50000000 #50
+
 
 def calcVmAllocationCost(row):
 
@@ -260,7 +262,7 @@ def calcVmAllocationCost(row):
     max_data_transfer_time = 0      # max time needed to transfer all data from all source tasks (len)
 
     earliest_data_ready_time = 0    # earliest time all data can be copied from source tasks (moment)
-    input_data_transfer = np.NaN
+    input_data_transfer = 0
     output_data_transfer = np.NaN
 
     #if row.task == '49/ID00048':
@@ -331,8 +333,14 @@ def calcVmAllocationCost(row):
     if expected_task_end > row.end:
         allocation_cost = 10000000000 # can't execute task
     else:    
-        allocation_cost = (full_runtime + idle_time) * vm_type.cost
-        
+        #allocation_cost = (full_runtime + idle_time) * vm_type.cost
+        #allocation_cost = full_runtime
+        allocation_cost = full_runtime + idle_time
+        #allocation_cost = input_data_transfer
+
+    if OPTIMIZATION == "MAX":
+        allocation_cost = -allocation_cost
+
     return allocation_cost + 1, expected_vm_start, input_data_transfer, expected_task_start, expected_task_end, output_data_transfer, expected_vm_end  # allocation_cost + 1 because zeros are bad for optimization
 
 def calcAllocationCosts(matchings):
@@ -387,7 +395,7 @@ def calculateMinCostPairings2(matchings, resultArray = []):
         
         for pair in pair_data:
             vm_index = unique_vms.index(pair[0])
-            if(pair[1] < 10000000000):
+            if(OPTIMIZATION == "MIN" and pair[1] < 1000000000 or OPTIMIZATION == "MAX" and pair[1] > -1000000000):
                 task_vms_list[vm_index] = pair[1]
             else:    
                 task_vms_list[vm_index] = DISALLOWED
@@ -579,10 +587,14 @@ def runExperiment():
 
 
     totalCost = vms_log.allocation_cost.sum()
+    vms["cost"] = vms["perf"] * (vms["vm_end"] - vms["vm_start"])
+    finCost = vms.cost.sum()
+    totalVmTime = vms.vm_end.sum() - vms.vm_start.sum()
+    totalCalcTime = tasks.allocation_end.sum() - tasks.allocation_start.sum()
     totalInputDataTransfers = vms_log.input_data.sum()
     print("""
           
-    ALLOCATION LOG: {} {}""".format(totalCost, totalInputDataTransfers))
+    ALLOCATION LOG: Cr Cost {}; Fin Cost {}; VM Time: {}; Calc Time: {}; Transfer Time: {}""".format(totalCost, finCost, totalVmTime, totalCalcTime, totalInputDataTransfers))
     print(vms_log)
     vms_log.to_csv("allocation_log.csv", sep=';')
 
